@@ -1,8 +1,8 @@
 use std::{env, fs, thread};
 
 mod message_concurrency;
-mod shared_concurrency;
 mod record;
+mod shared_concurrency;
 
 use std::{env, fs, io, thread};
 
@@ -37,11 +37,12 @@ fn parse_args() -> Flags {
         file_path: "data/measurements.txt".to_owned(),
     };
     for arg in arg_map {
-        let (key, value) = arg.split_once(':').unwrap();
-        match key {
-            "conc_type" if value == "shared" => flags.conc_type = ConcType::Shared,
-            "file_path" => flags.file_path = value.to_owned(),
-            _ => {}
+        if let Some((key, value)) = arg.split_once(':') {
+            match key {
+                "conc_type" if value == "shared" => flags.conc_type = ConcType::Shared,
+                "file_path" => flags.file_path = value.to_owned(),
+                _ => {}
+            }
         }
     }
     flags
