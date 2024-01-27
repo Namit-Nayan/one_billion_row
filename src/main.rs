@@ -17,7 +17,7 @@ fn main() {
     let mut line_buff = String::with_capacity(110);
     while reader.read_line(&mut line_buff).unwrap() > 0 {
         let (name, measure) = line_buff.split_once(';').unwrap();
-        let measure: f32 = measure.parse().unwrap();
+        let measure: f32 = measure.trim().parse().unwrap();
         if let Some(&id) = stations_pos.get(name) {
             measures[id] += Record::new(id, measure);
         } else {
