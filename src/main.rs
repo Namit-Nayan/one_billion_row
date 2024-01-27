@@ -1,16 +1,54 @@
-use std::{env, fmt, fs, ops, sync, thread};
+mod message_concurrency;
+mod shared_concurrency;
+mod record;
 
-fn main() {
-    let num_threads = thread::available_parallelism().unwrap().get();
-    let file_path = match env::args().nth(1) {
-        Some(f) => f,
-        None => "data/measurements.txt".to_owned(),
+use std::{env, fs, io, thread};
+
+fn main() -> Result<(), io::Error> {
+    let flags = parse_args();
+    let file = fs::File::open(flags.file_path.clone())?;
+    let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
+    let (start_pos, end_pos) = get_start_end_pos(&mmap);
+    let output = match flags.conc_type {
+        ConcType::Message => message_concurrency::get_output(&mmap, start_pos, end_pos),
+        _ => "".to_string(),
+        // ConcType::Shared => shared_concurrency::get_output(&mmap, start_pos, end_pos),
     };
-    let file = fs::File::open(file_path.clone()).expect("Measurement file not found in path.");
-    let mmap = unsafe { memmap2::MmapOptions::new().map(&file).unwrap() };
+    print!("{}", output);
+    Ok(())
+}
+
+enum ConcType {
+    Shared,
+    Message,
+}
+
+struct Flags {
+    conc_type: ConcType,
+    file_path: String,
+}
+
+fn parse_args() -> Flags {
+    let arg_map = env::args().skip(1).collect::<Vec<String>>();
+    let mut flags = Flags {
+        conc_type: ConcType::Message,
+        file_path: "data/measurements.txt".to_owned(),
+    };
+    for arg in arg_map {
+        let (key, value) = arg.split_once(':').unwrap();
+        match key {
+            "conc_type" if value == "shared" => flags.conc_type = ConcType::Shared,
+            "file_path" => flags.file_path = value.to_owned(),
+            _ => {}
+        }
+    }
+    flags
+}
+
+fn get_start_end_pos(mmap: &memmap2::Mmap) -> (Vec<usize>, Vec<usize>) {
+    let num_threads = thread::available_parallelism().unwrap().get();
     let file_size = mmap.len();
     let chunk_size = file_size / num_threads;
-    let mut stations_measures = ahash::AHashMap::<String, Record>::with_capacity(10_000);
     let mut start_pos = vec![0; num_threads];
     let mut end_pos = vec![0; num_threads];
     end_pos[num_threads - 1] = file_size - 1;
@@ -22,114 +60,5 @@ fn main() {
         *pos = s + 1;
         end_pos[i] = s;
     }
-    let (tx, rx) = sync::mpsc::channel();
-    thread::scope(|s| {
-        for (&start, &end) in start_pos.iter().zip(end_pos.iter()) {
-            let tx1 = tx.clone();
-            let buffer = &mmap;
-            let mut handles = vec![];
-            let handle = s.spawn(move || {
-                let chunk_res = process_chunk(buffer, start, end);
-                tx1.send(chunk_res)
-            });
-            handles.push(handle);
-        }
-    });
-    drop(tx);
-    for chunk_res in rx {
-        combine_res(&mut stations_measures, chunk_res);
-    }
-    let output_vec = output(&stations_measures);
-    print!("{{{}}}", output_vec.join(", "));
-}
-
-fn combine_res(acc: &mut ahash::AHashMap<String, Record>, curr: ahash::AHashMap<String, Record>) {
-    for (name, record) in curr {
-        acc.entry(name)
-            .and_modify(|rec| *rec += record)
-            .or_insert(record);
-    }
-}
-
-fn process_chunk(
-    mmap: &memmap2::Mmap,
-    mut start: usize,
-    end: usize,
-) -> ahash::AHashMap<String, Record> {
-    // Guranteed that start - 1 is '\n' and end is '\n'
-    let mut stations_measures = ahash::AHashMap::<String, Record>::with_capacity(10_000);
-    while start < end {
-        let mut name_end = start;
-        while mmap[name_end] != b';' {
-            name_end += 1;
-        }
-        let mut measure_end = name_end + 1;
-        while mmap[measure_end] != b'\n' {
-            measure_end += 1;
-        }
-        let (name, measure) = (
-            std::str::from_utf8(&mmap[start..name_end]).unwrap(),
-            std::str::from_utf8(&mmap[name_end + 1..measure_end])
-                .unwrap()
-                .parse()
-                .unwrap(),
-        );
-        let record = Record::new(measure);
-        stations_measures
-            .entry(name.to_owned())
-            .and_modify(|rec| *rec += record)
-            .or_insert(record);
-        start = measure_end + 1;
-    }
-    stations_measures
-}
-
-fn output(stations_measures: &ahash::AHashMap<String, Record>) -> Vec<String> {
-    let mut keys: Vec<_> = stations_measures.keys().collect();
-    keys.sort_unstable();
-    let mut output_vec = Vec::with_capacity(keys.len());
-    for name in keys {
-        output_vec.push(format!("{}={}", name, stations_measures.get(name).unwrap()));
-    }
-    output_vec
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Record {
-    low: f32,
-    high: f32,
-    sum: f64,
-    count: u32,
-}
-
-impl fmt::Display for Record {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:.1}/{:.1}/{:.1}", self.low, self.mean(), self.high)
-    }
-}
-
-impl ops::AddAssign for Record {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = Self {
-            low: self.low.min(rhs.low),
-            high: self.high.max(rhs.high),
-            sum: self.sum + rhs.sum,
-            count: self.count + rhs.count,
-        }
-    }
-}
-
-impl Record {
-    fn new(val: f32) -> Self {
-        Self {
-            low: val,
-            high: val,
-            sum: val as f64,
-            count: 1,
-        }
-    }
-
-    fn mean(&self) -> f32 {
-        (((self.sum) / (self.count as f64) * 10.0).ceil() / 10.0) as f32
-    }
+    (start_pos, end_pos)
 }
