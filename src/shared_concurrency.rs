@@ -46,7 +46,7 @@ fn process_chunk(mmap: &memmap2::Mmap, mut start: usize, end: usize, stations_me
     }
 }
 
-fn output_vec(stations_measures: MapType) -> String {
+fn output_vec(stations_measures: MapType) -> Vec<String> {
     let mut keys = Vec::<String>::with_capacity(stations_measures.len());
     for x in stations_measures.iter() {
         keys.push(x.key().clone())

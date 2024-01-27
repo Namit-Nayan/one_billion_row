@@ -4,17 +4,14 @@ mod message_concurrency;
 mod record;
 mod shared_concurrency;
 
-use std::{env, fs, io, thread};
-
-fn main() -> Result<(), io::Error> {
+fn main() -> Result<(), std::io::Error> {
     let flags = parse_args();
     let file = fs::File::open(flags.file_path.clone())?;
     let mmap = unsafe { memmap2::MmapOptions::new().map(&file)? };
     let (start_pos, end_pos) = get_start_end_pos(&mmap);
     let output = match flags.conc_type {
         ConcType::Message => message_concurrency::get_output(&mmap, start_pos, end_pos),
-        _ => "".to_string(),
-        // ConcType::Shared => shared_concurrency::get_output(&mmap, start_pos, end_pos),
+        ConcType::Shared => shared_concurrency::get_output(&mmap, start_pos, end_pos),
     };
     print!("{}", output);
     Ok(())
