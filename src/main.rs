@@ -1,5 +1,7 @@
 use std::{env, fmt, fs, ops, sync, thread};
 
+type MapType = sync::Arc<dashmap::DashMap<String, Record, ahash::RandomState>>;
+
 fn main() {
     let num_threads = thread::available_parallelism().unwrap().get();
     let file_path = match env::args().nth(1) {
@@ -10,7 +12,9 @@ fn main() {
     let mmap = unsafe { memmap2::MmapOptions::new().map(&file).unwrap() };
     let file_size = mmap.len();
     let chunk_size = file_size / num_threads;
-    let mut stations_measures = ahash::AHashMap::<String, Record>::with_capacity(10_000);
+    let stations_measures: MapType = sync::Arc::new(
+        dashmap::DashMap::with_capacity_and_hasher(10_000, ahash::RandomState::new()),
+    );
     let mut start_pos = vec![0; num_threads];
     let mut end_pos = vec![0; num_threads];
     end_pos[num_threads - 1] = file_size - 1;
@@ -22,42 +26,21 @@ fn main() {
         *pos = s + 1;
         end_pos[i] = s;
     }
-    let (tx, rx) = sync::mpsc::channel();
     thread::scope(|s| {
         for (&start, &end) in start_pos.iter().zip(end_pos.iter()) {
-            let tx1 = tx.clone();
             let buffer = &mmap;
-            let mut handles = vec![];
-            let handle = s.spawn(move || {
-                let chunk_res = process_chunk(buffer, start, end);
-                tx1.send(chunk_res)
+            let stations_measures = stations_measures.clone();
+            s.spawn(move || {
+                process_chunk(buffer, start, end, stations_measures);
             });
-            handles.push(handle);
         }
     });
-    drop(tx);
-    for chunk_res in rx {
-        combine_res(&mut stations_measures, chunk_res);
-    }
-    let output_vec = output(&stations_measures);
+    let output_vec = output(stations_measures.clone());
     print!("{{{}}}", output_vec.join(", "));
 }
 
-fn combine_res(acc: &mut ahash::AHashMap<String, Record>, curr: ahash::AHashMap<String, Record>) {
-    for (name, record) in curr {
-        acc.entry(name)
-            .and_modify(|rec| *rec += record)
-            .or_insert(record);
-    }
-}
-
-fn process_chunk(
-    mmap: &memmap2::Mmap,
-    mut start: usize,
-    end: usize,
-) -> ahash::AHashMap<String, Record> {
+fn process_chunk(mmap: &memmap2::Mmap, mut start: usize, end: usize, stations_measures: MapType) {
     // Guranteed that start - 1 is '\n' and end is '\n'
-    let mut stations_measures = ahash::AHashMap::<String, Record>::with_capacity(10_000);
     while start < end {
         let mut name_end = start;
         while mmap[name_end] != b';' {
@@ -81,15 +64,21 @@ fn process_chunk(
             .or_insert(record);
         start = measure_end + 1;
     }
-    stations_measures
 }
 
-fn output(stations_measures: &ahash::AHashMap<String, Record>) -> Vec<String> {
-    let mut keys: Vec<_> = stations_measures.keys().collect();
+fn output(stations_measures: MapType) -> Vec<String> {
+    let mut keys = Vec::<String>::with_capacity(stations_measures.len());
+    for x in stations_measures.iter() {
+        keys.push(x.key().clone())
+    }
     keys.sort_unstable();
     let mut output_vec = Vec::with_capacity(keys.len());
     for name in keys {
-        output_vec.push(format!("{}={}", name, stations_measures.get(name).unwrap()));
+        output_vec.push(format!(
+            "{}={}",
+            name,
+            *stations_measures.get(&name).unwrap()
+        ));
     }
     output_vec
 }
