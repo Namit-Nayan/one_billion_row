@@ -1,83 +1,100 @@
-use std::{
-    collections, env, fmt, fs, io::{self, BufRead, Seek}, ops, sync, thread
-};
+use std::{env, fmt, fs, ops, sync, thread};
 
 fn main() {
-    let num_threads = thread::available_parallelism().unwrap().get() as u64;
+    let num_threads = thread::available_parallelism().unwrap().get();
     let file_path = match env::args().nth(1) {
         Some(f) => f,
         None => "data/measurements.txt".to_owned(),
     };
-    let file = fs::File::open(file_path.clone())
-            .expect("Measurement file not found in path.");
-    let file_size = file.metadata().unwrap().len();
+    let file = fs::File::open(file_path.clone()).expect("Measurement file not found in path.");
+    let mmap = unsafe { memmap2::MmapOptions::new().map(&file).unwrap() };
+    let file_size = mmap.len();
     let chunk_size = file_size / num_threads;
-    let mut stations_measures = collections::HashMap::<String, Record>::with_capacity(10_000);
-    let mut handles = vec![];
+    let mut stations_measures = ahash::AHashMap::<String, Record>::with_capacity(10_000);
+    let mut start_pos = vec![0; num_threads];
+    let mut end_pos = vec![0; num_threads];
+    end_pos[num_threads - 1] = file_size - 1;
+    for (i, pos) in start_pos.iter_mut().skip(1).enumerate() {
+        let mut s = chunk_size * (i + 1);
+        while mmap[s] != b'\n' {
+            s += 1;
+        }
+        *pos = s + 1;
+        end_pos[i] = s;
+    }
     let (tx, rx) = sync::mpsc::channel();
-    let mut start = 0;
-    let mut buf = String::with_capacity(200);
-    while start < file_size {
-        let file = fs::File::open(file_path.clone())
-            .expect("Measurement file not found in path.");
-        let mut reader = io::BufReader::new(file);
-        let mut end = file_size.min(start + chunk_size);
-        let _ = reader.seek(io::SeekFrom::Start(end));
-        let _ = reader.read_line(&mut buf);
-        end = reader.stream_position().unwrap();
-        buf.clear();
-        let tx1 = tx.clone();
-        let handle = thread::spawn(move || {
-            let chunk_res = process_chunk(reader, start, end);
-            tx1.send(chunk_res)
-        });
-        handles.push(handle);
-        start = end + 1;
-    }
-    for handle in handles {
-        let _ = handle.join().unwrap();
-    }
+    thread::scope(|s| {
+        for (&start, &end) in start_pos.iter().zip(end_pos.iter()) {
+            let tx1 = tx.clone();
+            let buffer = &mmap;
+            let mut handles = vec![];
+            let handle = s.spawn(move || {
+                let chunk_res = process_chunk(buffer, start, end);
+                tx1.send(chunk_res)
+            });
+            handles.push(handle);
+        }
+    });
     drop(tx);
     for chunk_res in rx {
-        combine_res(&mut stations_measures, chunk_res)
+        combine_res(&mut stations_measures, chunk_res);
     }
     let output_vec = output(&stations_measures);
     print!("{{{}}}", output_vec.join(", "));
 }
 
-fn combine_res(acc: &mut collections::HashMap<String, Record>, curr: collections::HashMap<String, Record>) {
+fn combine_res(acc: &mut ahash::AHashMap<String, Record>, curr: ahash::AHashMap<String, Record>) {
     for (name, record) in curr {
-        acc.entry(name).and_modify(|rec| *rec += record).or_insert(record);
+        acc.entry(name)
+            .and_modify(|rec| *rec += record)
+            .or_insert(record);
     }
 }
 
-fn process_chunk(mut reader: io::BufReader<fs::File>, start: u64, end: u64) -> collections::HashMap<String, Record> {
+fn process_chunk(
+    mmap: &memmap2::Mmap,
+    mut start: usize,
+    end: usize,
+) -> ahash::AHashMap<String, Record> {
     // Guranteed that start - 1 is '\n' and end is '\n'
-    let mut stations_measures = collections::HashMap::<String, Record>::with_capacity(10_000);
-    let _ = reader.seek(io::SeekFrom::Start(start));
-    let mut buf = String::with_capacity(120);
-    while reader.stream_position().unwrap() < end {
-        let _ = reader.read_line(&mut buf);
-        let (name, measure) = buf.split_once(';').unwrap();
-        let measure: f32 = measure.trim().parse().unwrap();
+    let mut stations_measures = ahash::AHashMap::<String, Record>::with_capacity(10_000);
+    while start < end {
+        let mut name_end = start;
+        while mmap[name_end] != b';' {
+            name_end += 1;
+        }
+        let mut measure_end = name_end + 1;
+        while mmap[measure_end] != b'\n' {
+            measure_end += 1;
+        }
+        let (name, measure) = (
+            std::str::from_utf8(&mmap[start..name_end]).unwrap(),
+            std::str::from_utf8(&mmap[name_end + 1..measure_end])
+                .unwrap()
+                .parse()
+                .unwrap(),
+        );
         let record = Record::new(measure);
-        stations_measures.entry(name.to_owned()).and_modify(|rec| *rec += record).or_insert(record);
-        buf.clear();
+        stations_measures
+            .entry(name.to_owned())
+            .and_modify(|rec| *rec += record)
+            .or_insert(record);
+        start = measure_end + 1;
     }
     stations_measures
 }
 
-fn output(stations_measures: &collections::HashMap<String, Record>) -> Vec<String> {
+fn output(stations_measures: &ahash::AHashMap<String, Record>) -> Vec<String> {
     let mut keys: Vec<_> = stations_measures.keys().collect();
     keys.sort_unstable();
     let mut output_vec = Vec::with_capacity(keys.len());
-    for  name in keys {
+    for name in keys {
         output_vec.push(format!("{}={}", name, stations_measures.get(name).unwrap()));
     }
     output_vec
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Record {
     low: f32,
     high: f32,
