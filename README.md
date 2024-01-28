@@ -7,14 +7,18 @@ Support command line arguments:
    
    ```cargo run -r --bin generate_data 1_000_000_000 data/measurements.txt```
 
-2. file_path:/path/to/measurement.txt
+   where `` 1_000_000_000_`` number of rows, and ``data/measurements.txt`` is CSV file path to weather station names.
+
+   File should be in this format -> https://github.com/gunnarmorling/1brc/blob/main/data/weather_stations.csv
+
+3. ``file_path:/path/to/measurement.txt``
    To specify your source file.
    Defaults to "data/measurements.txt".
    e.g. 
    
    ```cargo run -r --bin one_billion_row file_path:data/measurements.txt```
 
-3. conc_type:shared
+4. ``conc_type:shared``
    To use Shared-State concurrency.
    Defaults to Communicating by message passing.
    e.g. 
