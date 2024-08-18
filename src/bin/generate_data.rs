@@ -31,7 +31,7 @@ fn main() {
     for _ in 0..rows {
         let (station_id, temp_id) = (rng.sample(station_dist), rng.sample(temp_dist));
         let temp = ((temp_id - 999) as f32) / 10.0;
-        for buf in [stations[station_id].as_slice(), &[b';'], temp.to_string().as_bytes(), &[b'\n']] {
+        for buf in [stations[station_id].as_slice(), &[b';'], format!("{:.1}", temp).as_bytes(), &[b'\n']] {
             let _ = writer.write(buf);
         }
     }

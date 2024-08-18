@@ -7,9 +7,9 @@ Support command line arguments:
    
    ```cargo run -r --bin generate_data 1_000_000_000 data/measurements.txt```
 
-   where `` 1_000_000_000_`` number of rows, and ``data/measurements.txt`` is CSV file path to weather station names.
+   where `` 1_000_000_000`` number of rows, and ``data/measurements.txt`` is the output file path. CSV file path to weather station names should be in ``data/weather_stations.csv``.
 
-   File should be in this format -> https://github.com/gunnarmorling/1brc/blob/main/data/weather_stations.csv
+   CSV file should be in this format -> https://github.com/gunnarmorling/1brc/blob/main/data/weather_stations.csv
 
 3. ``file_path:/path/to/measurement.txt``
    To specify your source file.
